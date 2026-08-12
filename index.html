@@ -52,7 +52,7 @@
 <div id="map">
   <div id="titleBox">Frietjes kaart voor Etienne le Duc  — Amsterdam</div>
   <div id="legendBox">
-    <div class="legend-title">Aantal huishoudens per wijk</div>
+    <div class="legend-title">Aantal huishoudens per wijk (per km2)</div>
     <div class="legend-scale"></div>
     <div class="legend-labels"><span id="legendMin"></span><span id="legendMax"></span></div>
   </div>
@@ -73,14 +73,15 @@ const LABEL_MAX_RESOLUTION = 15;
 
 // Waarop de choropleth-kleur is gebaseerd
 const LEGEND_FIELD = 'aantalHuishoudens';
-const SCALE_MIN = 1500;
-const SCALE_MAX = 13000;
+const SCALE_MIN = 1000;
+const SCALE_MAX = 20000;
 
 const FIELDS = {
   wijknaam: ['_wijknaam', 'wijknaam'],
   pct0_15: ['_percentagePersonen0Tot15Jaar', 'percentagePersonen0Tot15Jaar'],
   pctKids: ['_percentageHuishoudensMetKinderen', 'percentageHuishoudensMetKinderen'],
   aantalHuishoudens: ['_aantalHuishoudens', 'aantalHuishoudens'],
+  oppervlakteLand: ['_oppervlakteLandInHa', 'oppervlakteLandInHa', '_oppervlakteTotaalInHa', 'oppervlakteTotaalInHa'],
   inwoners: ['_aantalInwoners', 'aantalInwoners'],
   zaaknummer: ['zaaknummer'],
   zaaknaam: ['zaaknaam'],
@@ -93,13 +94,19 @@ const FIELDS = {
   openZoDoVan: ['openingstijdenZoDoVan'],
   openZoDoTot: ['openingstijdenZoDoTot'],
   openVrZaVan: ['openingstijdenVrZaVan'],
-  openVrZaTot: ['openingstijdenVrZaTot']
+  openVrZaTot: ['openingstijdenVrZaTot'],
 };
 function getProp(props, key) {
   for (const c of FIELDS[key]) if (props[c] !== undefined && props[c] !== '') return props[c];
   return undefined;
 }
-
+  
+function getHuishoudensPerKm2(props) {
+  const huishoudens = getProp(props, 'aantalHuishoudens');
+  const ha = getProp(props, 'oppervlakteLand');
+  if (huishoudens === undefined || !ha) return undefined;
+  return (huishoudens / ha) * 100; // hectare -> km²
+}
 // ---------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------
@@ -154,7 +161,7 @@ const snackbarSource = new ol.source.Vector();
 const wijkLayer = new ol.layer.Vector({
   source: wijkSource,
   style: (feature) => new ol.style.Style({
-    fill: new ol.style.Fill({ color: scaleColor(getProp(feature.getProperties(), LEGEND_FIELD) ?? 0, 0.55) }),
+    fill: new ol.style.Fill({ color: scaleColor(getHuishoudensPerKm2(feature.getProperties()) ?? 0, 0.55) }),
     stroke: new ol.style.Stroke({ color: 'rgba(120,100,60,0.7)', width: 1, lineDash: [4, 3] })
   })
 });
