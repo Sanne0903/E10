@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>Frietjes kaart voor Etienne le Duc </title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+  #map { width: 100%; height: 100%; position: relative; }
+
+  #titleBox {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: white; padding: 8px 18px; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); font-weight: 600; font-size: 15px;
+    z-index: 10; white-space: nowrap;
+  }
+
+  #legendBox {
+    position: absolute; bottom: 24px; left: 12px; width: 190px;
+    background: white; padding: 10px 14px; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); font-size: 12px; z-index: 10;
+  }
+  #legendBox .legend-title { font-weight: 600; margin-bottom: 6px; }
+  #legendBox .legend-scale {
+    height: 14px; border-radius: 3px; margin-bottom: 4px;
+    background: linear-gradient(to right, rgb(255,243,176), rgb(179,0,27));
+  }
+  #legendBox .legend-labels { display: flex; justify-content: space-between; color: #666; }
+
+  .ol-popup {
+    position: absolute; background: white; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+    padding: 12px 14px; border-radius: 8px; border: 1px solid #ddd;
+    min-width: 240px; max-width: 300px; max-height: 340px; overflow-y: auto;
+    font-size: 12.5px; bottom: 14px; left: -140px;
+  }
+  .ol-popup:after {
+    content: ""; position: absolute; top: 100%; left: 50%; margin-left: -8px;
+    border: 8px solid transparent; border-top-color: white;
+  }
+  .ol-popup .close { position: absolute; top: 4px; right: 8px; cursor: pointer; color: #999; }
+  .ol-popup h3 { margin: 0 0 2px; font-size: 14px; }
+  .ol-popup .sub { color: #888; font-size: 11px; margin-bottom: 8px; }
+  .ol-popup .section { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+  .ol-popup .section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .ol-popup .row { margin-bottom: 2px; }
+  .ol-popup .row b { color: #333; }
+  .ol-popup .kids b { color: #b3001b; }
+</style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/openlayers/10.6.1/ol.min.css">
+</head>
+<body>
+<div id="map">
+  <div id="titleBox">Frietjes kaart voor Etienne le Duc  — Amsterdam</div>
+  <div id="legendBox">
+    <div class="legend-title">Aantal huishoudens per wijk</div>
+    <div class="legend-scale"></div>
+    <div class="legend-labels"><span id="legendMin"></span><span id="legendMax"></span></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.20.9/proj4.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/openlayers/10.6.1/dist/ol.min.js"></script>
+<script>
+// ---------------------------------------------------------------------
+// CONFIG
+// ---------------------------------------------------------------------
+const WIJKEN_PROJECTION = 'EPSG:4326';
+const SNACKBARS_PROJECTION = 'EPSG:4326';
+const MAP_PROJECTION = 'EPSG:3857';
+const WIJKEN_URL = 'wijken.json';
+const SNACKBARS_URL = 'frietLocaties.json';
+const LABEL_MAX_RESOLUTION = 15;
+
+// Waarop de choropleth-kleur is gebaseerd
+const LEGEND_FIELD = 'aantalHuishoudens';
+const SCALE_MIN = 1500;
+const SCALE_MAX = 13000;
+
+const FIELDS = {
+  wijknaam: ['_wijknaam', 'wijknaam'],
+  pct0_15: ['_percentagePersonen0Tot15Jaar', 'percentagePersonen0Tot15Jaar'],
+  pctKids: ['_percentageHuishoudensMetKinderen', 'percentageHuishoudensMetKinderen'],
+  aantalHuishoudens: ['_aantalHuishoudens', 'aantalHuishoudens'],
+  inwoners: ['_aantalInwoners', 'aantalInwoners'],
+  zaaknummer: ['zaaknummer'],
+  zaaknaam: ['zaaknaam'],
+  adres: ['adres'],
+  postcode: ['postcode'],
+  zaakCategorie: ['zaakCategorie', 'zaak_categorie'],
+  zaakSpecificatie: ['zaakSpecificatie', 'zaak_specificatie'],
+  begindatum: ['begindatum'],
+  einddatum: ['einddatum'],
+  openZoDoVan: ['openingstijdenZoDoVan'],
+  openZoDoTot: ['openingstijdenZoDoTot'],
+  openVrZaVan: ['openingstijdenVrZaVan'],
+  openVrZaTot: ['openingstijdenVrZaTot']
+};
+function getProp(props, key) {
+  for (const c of FIELDS[key]) if (props[c] !== undefined && props[c] !== '') return props[c];
+  return undefined;
+}
+
+// ---------------------------------------------------------------------
+// Formatters
+// ---------------------------------------------------------------------
+function formatDate(yyyymmdd) {
+  if (!yyyymmdd) return 'onbekend';
+  const s = String(yyyymmdd);
+  if (s.length !== 8) return s;
+  return `${s.slice(6,8)}-${s.slice(4,6)}-${s.slice(0,4)}`;
+}
+function formatOpeningstijden(p) {
+  const zoDoVan = getProp(p, 'openZoDoVan'), zoDoTot = getProp(p, 'openZoDoTot');
+  const vrZaVan = getProp(p, 'openVrZaVan'), vrZaTot = getProp(p, 'openVrZaTot');
+  const lines = [];
+  if (zoDoVan || zoDoTot) lines.push(`Zo–Do: ${zoDoVan ?? '?'} – ${zoDoTot ?? '?'}`);
+  if (vrZaVan || vrZaTot) lines.push(`Vr–Za: ${vrZaVan ?? '?'} – ${vrZaTot ?? '?'}`);
+  return lines.length ? lines.join('<br>') : 'onbekend';
+}
+function formatNumber(n) {
+  return n === undefined ? '?' : Number(n).toLocaleString('nl-NL');
+}
+
+// ---------------------------------------------------------------------
+// Projectie (alleen actief zodra iets in RD blijkt te staan)
+// ---------------------------------------------------------------------
+proj4.defs('EPSG:28992',
+  '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 ' +
+  '+x_0=155000 +y_0=463000 +ellps=bessel ' +
+  '+towgs84=565.4171,50.3319,465.5524,-0.398957,0.343988,-1.8774,4.0725 +units=m +no_defs'
+);
+ol.proj.proj4.register(proj4);
+
+// ---------------------------------------------------------------------
+// Kleurschaal
+// ---------------------------------------------------------------------
+const LOW = [255, 243, 176], HIGH = [179, 0, 27];
+function scaleColor(value, alpha) {
+  const t = Math.max(0, Math.min(1, (value - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)));
+  const r = Math.round(LOW[0] + t * (HIGH[0] - LOW[0]));
+  const g = Math.round(LOW[1] + t * (HIGH[1] - LOW[1]));
+  const b = Math.round(LOW[2] + t * (HIGH[2] - LOW[2]));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+document.getElementById('legendMin').textContent = formatNumber(SCALE_MIN);
+document.getElementById('legendMax').textContent = formatNumber(SCALE_MAX);
+
+// ---------------------------------------------------------------------
+// Lagen
+// ---------------------------------------------------------------------
+const wijkSource = new ol.source.Vector();
+const snackbarSource = new ol.source.Vector();
+
+const wijkLayer = new ol.layer.Vector({
+  source: wijkSource,
+  style: (feature) => new ol.style.Style({
+    fill: new ol.style.Fill({ color: scaleColor(getProp(feature.getProperties(), LEGEND_FIELD) ?? 0, 0.55) }),
+    stroke: new ol.style.Stroke({ color: 'rgba(120,100,60,0.7)', width: 1, lineDash: [4, 3] })
+  })
+});
+
+const snackbarLayer = new ol.layer.Vector({
+  source: snackbarSource,
+  style: (feature, resolution) => {
+    const styles = [
+      new ol.style.Style({
+        text: new ol.style.Text({ text: '🍟', font: '20px sans-serif' })
+      })
+    ];
+    if (resolution < LABEL_MAX_RESOLUTION) {
+      const naam = getProp(feature.getProperties(), 'zaaknaam') ?? '';
+      styles.push(new ol.style.Style({
+        text: new ol.style.Text({
+          text: naam,
+          font: '12px sans-serif',
+          offsetY: -22,
+          fill: new ol.style.Fill({ color: '#1c1c1c' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 3 })
+        })
+      }));
+    }
+    return styles;
+  }
+});
+
+const map = new ol.Map({
+  target: 'map',
+  layers: [
+    new ol.layer.Tile({ source: new ol.source.OSM() }),
+    wijkLayer,
+    snackbarLayer
+  ],
+  view: new ol.View({
+    center: ol.proj.fromLonLat([4.895, 52.372]),
+    zoom: 12
+  })
+});
+
+// ---------------------------------------------------------------------
+// Popup
+// ---------------------------------------------------------------------
+const popupEl = document.createElement('div');
+popupEl.className = 'ol-popup';
+popupEl.style.display = 'none';
+document.getElementById('map').appendChild(popupEl);
+const popupOverlay = new ol.Overlay({ element: popupEl, positioning: 'bottom-center', stopEvent: true });
+map.addOverlay(popupOverlay);
+
+function closePopup() { popupEl.style.display = 'none'; }
+
+function showSnackbarPopup(feature, coordinate) {
+  const p = feature.getProperties();
+
+  const naam = getProp(p, 'zaaknaam') ?? '(naam onbekend)';
+  const nummer = getProp(p, 'zaaknummer');
+  const adres = getProp(p, 'adres') ?? '';
+  const postcode = getProp(p, 'postcode') ?? '';
+  const categorie = getProp(p, 'zaakCategorie');
+  const specificatie = getProp(p, 'zaakSpecificatie');
+  const begin = formatDate(getProp(p, 'begindatum'));
+  const eind = formatDate(getProp(p, 'einddatum'));
+  const openingstijden = formatOpeningstijden(p);
+
+  const wijknaam = getProp(p, 'wijknaam');
+  const pct = getProp(p, 'pct0_15');
+  const huishoudens = getProp(p, 'aantalHuishoudens');
+  const kids = getProp(p, 'pctKids');
+
+  popupEl.innerHTML = `
+    <span class="close" onclick="this.parentNode.style.display='none'">&times;</span>
+    <h3>${naam}</h3>
+    <div class="sub">${nummer ? 'zaaknr. ' + nummer : ''}</div>
+
+    <div class="section">
+      <div class="row">${adres}${postcode ? ', ' + postcode : ''}</div>
+      <div class="row">${[categorie, specificatie].filter(Boolean).join(' — ')}</div>
+    </div>
+
+    <div class="section">
+      <div class="row">Vergunning: <b>${begin}</b> t/m <b>${eind}</b></div>
+      <div class="row">${openingstijden}</div>
+    </div>
+
+    <div class="section">
+      ${wijknaam ? `<div class="row">Wijk: <b>${wijknaam}</b></div>` : ''}
+      ${pct !== undefined ? `<div class="row kids"><b>${pct}%</b> is 0–15 jaar</div>` : ''}
+      ${huishoudens !== undefined ? `<div class="row">${formatNumber(huishoudens)} huishoudens in de wijk</div>` : ''}
+      ${kids !== undefined ? `<div class="row kids"><b>${kids}%</b> huishoudens met kinderen</div>` : ''}
+    </div>
+  `;
+  popupEl.style.display = 'block';
+  popupOverlay.setPosition(coordinate);
+}
+
+function showWijkPopup(feature, coordinate) {
+  const p = feature.getProperties();
+  const naam = getProp(p, 'wijknaam') ?? '(wijk onbekend)';
+  const pct = getProp(p, 'pct0_15');
+  const kids = getProp(p, 'pctKids');
+  const inwoners = getProp(p, 'inwoners');
+  const huishoudens = getProp(p, 'aantalHuishoudens');
+  popupEl.innerHTML = `
+    <span class="close" onclick="this.parentNode.style.display='none'">&times;</span>
+    <h3>${naam}</h3>
+    <div class="section">
+      ${inwoners !== undefined ? `<div class="row">${formatNumber(inwoners)} inwoners</div>` : ''}
+      ${huishoudens !== undefined ? `<div class="row">${formatNumber(huishoudens)} huishoudens</div>` : ''}
+      <div class="row kids"><b>${pct}%</b> 0–15 jaar</div>
+      ${kids !== undefined ? `<div class="row kids"><b>${kids}%</b> huishoudens met kinderen</div>` : ''}
+    </div>
+  `;
+  popupEl.style.display = 'block';
+  popupOverlay.setPosition(coordinate);
+}
+
+map.on('singleclick', (evt) => {
+  let handled = false;
+  map.forEachFeatureAtPixel(evt.pixel, (feature, layer) => {
+    if (handled) return;
+    if (layer === snackbarLayer) { showSnackbarPopup(feature, evt.coordinate); handled = true; }
+    else if (layer === wijkLayer) { showWijkPopup(feature, evt.coordinate); handled = true; }
+  });
+  if (!handled) closePopup();
+});
+
+// ---------------------------------------------------------------------
+// Data laden
+// ---------------------------------------------------------------------
+const geojsonFormat = new ol.format.GeoJSON();
+function readFeatures(geojson, dataProjection) {
+  return geojsonFormat.readFeatures(geojson, { dataProjection, featureProjection: MAP_PROJECTION });
+}
+
+Promise.all([
+  fetch(WIJKEN_URL).then(r => { if (!r.ok) throw new Error('wijken.json: HTTP ' + r.status); return r.json(); }),
+  fetch(SNACKBARS_URL).then(r => { if (!r.ok) throw new Error('frietLocaties.json: HTTP ' + r.status); return r.json(); })
+]).then(([wijkenGeojson, snackbarsGeojson]) => {
+  const wijkFeatures = readFeatures(wijkenGeojson, WIJKEN_PROJECTION);
+  const snackbarFeatures = readFeatures(snackbarsGeojson, SNACKBARS_PROJECTION);
+  wijkSource.addFeatures(wijkFeatures);
+  snackbarSource.addFeatures(snackbarFeatures);
+  map.getView().fit(snackbarSource.getExtent(), { padding: [40, 40, 40, 40], maxZoom: 15 });
+}).catch(err => {
+  console.error('Kon data niet laden:', err);
+  alert('Kon de GeoJSON-bestanden niet laden, check de console (F12) voor details.');
+});
+</script>
+</body>
+</html>
